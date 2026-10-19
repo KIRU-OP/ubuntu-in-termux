@@ -36,15 +36,44 @@ case "$(uname -m)" in
   *) err "Unknown architecture: $(uname -m)" ;;
 esac
 
-# ---- apt keyring fix (NO_PUBKEY 871920D1991BC93C) ----
+# ---- apt fix: NO_PUBKEY 871920D1991BC93C (proot) ----
 fix_apt_keys() {
-  log "Ubuntu apt keyring check/fix ho raha hai..."
-  "$BASE_DIR/startubuntu.sh" 'apt-get update >/dev/null 2>&1 && exit 0
-apt-get -o Acquire::AllowInsecureRepositories=true -o Acquire::AllowDowngradeToInsecureRepositories=true update
-apt-get install -y --reinstall --allow-unauthenticated ubuntu-keyring gnupg
-apt-get update' \
-    && log "apt keyring theek hai." \
-    || warn "Keyring fix fail. Ubuntu ke andar manually karo (README dekho)."
+  log "Ubuntu apt keyring fix ho raha hai..."
+  local APT_DIR="$DIRECTORY/etc/apt"
+  local KEYFILE="$DIRECTORY/usr/share/keyrings/ubuntu-archive-keyring.gpg"
+
+  # 1. proot me apt ka _apt sandbox user key nahi padh pata
+  mkdir -p "$APT_DIR/apt.conf.d"
+  echo 'APT::Sandbox::User "root";' > "$APT_DIR/apt.conf.d/99proot"
+
+  # 2. keyring file adhuri/missing ho to package host se laao aur rootfs me extract karo
+  if [ ! -s "$KEYFILE" ]; then
+    warn "Keyring file missing, ubuntu-keyring package laa raha hoon..."
+    local B="http://ports.ubuntu.com/ubuntu-ports/pool/main/u/ubuntu-keyring/"
+    local F
+    F="$(fetch_stdout "$B" | grep -oE 'ubuntu-keyring_[0-9.]+_all\.deb' | sort -uV | tail -n1)"
+    if [ -n "$F" ] && fetch "$B$F" "$BASE_DIR/$F"; then
+      mkdir -p "$BASE_DIR/kr-tmp" && ( cd "$BASE_DIR/kr-tmp" && ar x "../$F" 2>/dev/null )
+      if ls "$BASE_DIR"/kr-tmp/data.tar.* >/dev/null 2>&1; then
+        tar -xf "$BASE_DIR"/kr-tmp/data.tar.* -C "$DIRECTORY" 2>/dev/null
+      elif command -v dpkg-deb >/dev/null 2>&1; then
+        dpkg-deb -x "$BASE_DIR/$F" "$DIRECTORY"
+      fi
+      rm -rf "$BASE_DIR/kr-tmp" "$BASE_DIR/$F"
+    fi
+  fi
+  [ -s "$KEYFILE" ] || { warn "Keyring file ab bhi nahi mili."; return 1; }
+
+  # 3. sources.list ko keyring file se bind karo (idempotent)
+  if [ -f "$APT_DIR/sources.list" ] && ! grep -q 'signed-by=' "$APT_DIR/sources.list"; then
+    cp "$APT_DIR/sources.list" "$APT_DIR/sources.list.bak"
+    sed -i -E 's#^deb (\[[^]]*\] )?#deb [signed-by=/usr/share/keyrings/ubuntu-archive-keyring.gpg] #' "$APT_DIR/sources.list"
+  fi
+
+  # 4. verify
+  "$BASE_DIR/startubuntu.sh" 'apt-get update' \
+    && log "apt update sahi chal raha hai." \
+    || warn "apt update abhi bhi fail. Output README ke Troubleshooting me bhejo."
 }
 
 install_ubuntu() {
