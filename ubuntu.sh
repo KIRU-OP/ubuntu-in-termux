@@ -91,6 +91,34 @@ cleanup_l2s() {
   return 0
 }
 
+# ---- ca-certificates postinst "exit status 127" workaround ----
+# (asli wajah abhi confirm nahi; stub se dpkg aage badhta hai, phir CA bundle ban jata hai)
+fix_ca_certs() {
+  log "ca-certificates check/fix ho raha hai..."
+  "$BASE_DIR/startubuntu.sh" 'export DEBIAN_FRONTEND=noninteractive
+U=/usr/sbin/update-ca-certificates
+[ -e $U.real ] && mv -f $U.real $U
+if dpkg --audit 2>/dev/null | grep -q ca-certificates; then
+  cp -p $U $U.real
+  printf "#!/bin/sh\nexit 0\n" > $U
+  chmod +x $U
+  dpkg --configure -a
+  mv -f $U.real $U
+fi
+if [ ! -s /etc/ssl/certs/ca-certificates.crt ] && [ -x $U ] && [ -d /usr/share/ca-certificates ]; then
+  if ! update-ca-certificates >/dev/null 2>&1; then
+    echo "update-ca-certificates fail, CA bundle manually ban raha hai"
+    mkdir -p /etc/ssl/certs
+    : > /etc/ssl/certs/ca-certificates.crt
+    grep -vE "^(#|!|$)" /etc/ca-certificates.conf | while read -r c; do
+      cat "/usr/share/ca-certificates/$c" >> /etc/ssl/certs/ca-certificates.crt
+    done
+  fi
+fi' >> "$BASE_DIR/ca-fix.log" 2>&1 \
+    && log "ca-certificates theek hai." \
+    || warn "ca-certificates fix me problem, dekho: $BASE_DIR/ca-fix.log"
+}
+
 install_ubuntu() {
   mkdir -p "$BASE_DIR" "$BIN_DIR" "$BASE_DIR/ubuntu-binds"
   cd "$BASE_DIR" || err "Directory nahi mili: $BASE_DIR"
@@ -150,6 +178,10 @@ install_ubuntu() {
 #!/bin/bash
 cd "\$(dirname "\$0")"
 unset LD_PRELOAD
+# host ka DNS resolver guest me copy karo (8.8.8.8 DomCloud pe blocked/alag IP de sakta hai)
+if grep -qE '^nameserver' /etc/resolv.conf 2>/dev/null; then
+  cp -f /etc/resolv.conf ubuntu-fs/etc/resolv.conf 2>/dev/null || true
+fi
 command="$PROOT_BIN"
 # 'FATAL: kernel too old' aaye to neeche wali line uncomment karo
 #command+=" -k 4.14.81"
@@ -172,6 +204,10 @@ command+=" HOME=/root"
 command+=" PATH=/usr/local/sbin:/usr/local/bin:/bin:/usr/bin:/sbin:/usr/sbin:/usr/games:/usr/local/games"
 command+=" TERM=\${TERM:-xterm-256color}"
 command+=" LANG=C.UTF-8"
+# host ke proxy variables guest me pass karo (env -i inko mita deta hai)
+for v in http_proxy https_proxy HTTP_PROXY HTTPS_PROXY ALL_PROXY all_proxy no_proxy NO_PROXY; do
+  if [ -n "\${!v:-}" ]; then command+=" \$v=\${!v}"; fi
+done
 command+=" /bin/bash --login"
 if [ -z "\$1" ]; then
   exec \$command
@@ -186,6 +222,7 @@ EOM
   cleanup_l2s "$DIRECTORY"
 
   fix_apt_keys
+  fix_ca_certs
 
   log "Install complete! Launch: $BASE_DIR/startubuntu.sh  (ya: startubuntu)"
   log "Agar 'startubuntu' na mile to: export PATH=\"\$HOME/.local/bin:\$PATH\""
