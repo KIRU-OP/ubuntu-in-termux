@@ -143,10 +143,21 @@ install_ubuntu() {
     fetch "$ROOTFS_URL" ubuntu.tar.xz || err "Rootfs download fail: $ROOTFS_URL"
     command -v xz >/dev/null 2>&1 || err "xz install nahi hai (tar -J ke liye zaruri)."
 
+    # adhuri/purani rootfs hatao (proot ki read-only dirs ke liye pehle chmod)
+    if [ -e "$DIRECTORY" ]; then
+      chmod -R u+rwx "$DIRECTORY" 2>/dev/null
+      rm -rf "$DIRECTORY"
+    fi
+    [ -s ubuntu.tar.xz ] && xz -t ubuntu.tar.xz 2>/dev/null || err "Download kharab hai (ubuntu.tar.xz). Dobara chalao."
     mkdir -p "$DIRECTORY"
     log "Extracting rootfs..."
-    "$PROOT_BIN" --link2symlink tar -xJf ubuntu.tar.xz -C "$DIRECTORY" --strip-components=1 --exclude='dev' || :
-    [ -x "$DIRECTORY/bin/bash" ] || err "Extraction fail."
+    # pehle plain tar (proot ke bina), fail ho to proot tar
+    tar -xJf ubuntu.tar.xz -C "$DIRECTORY" --strip-components=1 --no-same-owner --exclude='dev' 2>"$BASE_DIR/extract.log" || :
+    if [ ! -x "$DIRECTORY/bin/bash" ]; then
+      warn "Plain tar se extract adhura, proot tar try ho raha hai (log: $BASE_DIR/extract.log)"
+      "$PROOT_BIN" --link2symlink tar -xJf ubuntu.tar.xz -C "$DIRECTORY" --strip-components=1 --exclude='dev' 2>>"$BASE_DIR/extract.log" || :
+    fi
+    [ -x "$DIRECTORY/bin/bash" ] || err "Extraction fail. Log: $BASE_DIR/extract.log"
     log "Rootfs extract ho gaya."
 
     log "DNS fix (resolv.conf)..."
