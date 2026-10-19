@@ -76,6 +76,8 @@ fix_apt_keys() {
     return 0
   fi
 
+  apt_diag
+
   # 5. fallback: proot me gpgv key nahi padh paa raha -> trusted=yes (UNVERIFIED)
   warn "apt signature verify fail (debug log: $BASE_DIR/apt-debug.log)."
   warn "Fallback: trusted=yes laga raha hoon. Packages UNVERIFIED honge (http source)."
@@ -88,6 +90,31 @@ fix_apt_keys() {
     warn "apt update ab bhi fail. $BASE_DIR/apt-debug.log bhejo."
     return 1
   fi
+}
+
+# ---- diagnose: key file sahi hai? gpgv host pe / proot me chalta hai? ----
+apt_diag() {
+  local T="$BASE_DIR/gpg-test"
+  local KF="$DIRECTORY/usr/share/keyrings/ubuntu-archive-keyring.gpg"
+  mkdir -p "$T"
+  warn "---- DIAGNOSIS (ye output bhejo) ----"
+  warn "arch: $(uname -m) | date: $(date -u +%FT%TZ)"
+  warn "keyring file: $(ls -l "$KF" 2>&1)"
+  warn "keyring sha256: $(sha256sum "$KF" 2>&1 | cut -c1-64)"
+  if fetch "http://ports.ubuntu.com/ubuntu-ports/dists/jammy/InRelease" "$T/InRelease"; then
+    warn "InRelease size: $(wc -c < "$T/InRelease") bytes"
+    if command -v gpgv >/dev/null 2>&1; then
+      warn "HOST gpgv: $(gpgv --keyring "$KF" "$T/InRelease" 2>&1 | head -3 | tr '\n' ' ')"
+    else
+      warn "HOST gpgv: not installed"
+    fi
+    warn "PROOT gpgv: $("$BASE_DIR/startubuntu.sh" "gpgv --keyring /usr/share/keyrings/ubuntu-archive-keyring.gpg /host-home/ubuntu-domcloud/gpg-test/InRelease" 2>&1 | head -4 | tr '\n' ' ')"
+  else
+    warn "InRelease download fail"
+  fi
+  warn "apt-debug: $(grep -iE 'gpgv|keyring|NO_PUBKEY|denied|permission' "$BASE_DIR/apt-debug.log" 2>/dev/null | head -6 | tr '\n' ' ')"
+  warn "---- END DIAGNOSIS ----"
+  rm -rf "$T"
 }
 
 install_ubuntu() {
