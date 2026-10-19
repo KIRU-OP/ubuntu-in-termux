@@ -1,30 +1,85 @@
-# ubuntu-in-termux
+# ubuntu-in-termux (DomCloud edition)
 
-[![DISCORD](https://img.shields.io/badge/Chat-On%20Discord-738BD7.svg?style=for-the-badge)](https://discord.gg/Xaqkdeh)
+Install Ubuntu 22.04 (jammy) with **proot** on — no root needed.
+The rootfs is downloaded from GitHub (proot-distro releases), because  blocks the Ubuntu mirrors.
+Works on both `x86_64` and `aarch64` servers.
 
-## What's This?
+## Deploy
 
-This is a script that allows you to install Ubuntu in your termux application without a rooted device
+Open the DomCloud **Webshell** (or SSH into your site) and run:
 
-## Updates
+```bash
+cd ~
+git clone https://github.com/KIRU-OP/ubuntu-in-termux
+cd ubuntu-in-termux
+chmod +x ubuntu.sh
+./ubuntu.sh -y
+```
 
-**• Updated to ubuntu 22.04**
+If the repo is already cloned, update it first:
 
-## Important
+```bash
+cd ~/ubuntu-in-termux
+git pull
+chmod +x ubuntu.sh
+./ubuntu.sh -y
+```
 
-**• If you have to use ubuntu in termux with a x86/i\*86 architecture or prefer ubuntu 19.10 you can use this branch -> https://github.com/MFDGaming/ubuntu-in-termux/tree/ubuntu19.10**
+## Start Ubuntu
 
-**• If you get an error message that says "Fatal Kernel too old" you have to uncomment the line that reads "command+=" -k 4.14.81"" (remove the # that is located in front of the line) in the "startubuntu.sh" file**
+```bash
+~/ubuntu-domcloud/startubuntu.sh
+```
 
-### Installation steps
+Or, if `~/.local/bin` is in your PATH:
 
-1. Update termux: `apt-get update && apt-get upgrade -y`
-2. Install wget: `apt-get install wget -y`
-3. Install proot: `apt-get install proot -y`
-4. Install git: `apt-get install git -y`
-5. Go to HOME folder: `cd ~`
-6. Download script: `git clone https://github.com/MFDGaming/ubuntu-in-termux.git`
-7. Go to script folder: `cd ubuntu-in-termux`
-8. Give execution permission: `chmod +x ubuntu.sh`
-9. Run the script: `./ubuntu.sh -y`
-10. Now just start ubuntu: `./startubuntu.sh`
+```bash
+export PATH="$HOME/.local/bin:$PATH"
+startubuntu
+```
+
+Leave Ubuntu with `exit`.
+
+## First-time setup inside Ubuntu
+
+If `apt update` shows `NO_PUBKEY` errors, run:
+
+```bash
+apt-get -o Acquire::AllowInsecureRepositories=true \
+        -o Acquire::AllowDowngradeToInsecureRepositories=true update
+apt-get install -y --allow-unauthenticated ubuntu-keyring
+apt-get update && apt-get upgrade -y
+```
+
+Check the version:
+
+```bash
+cat /etc/os-release
+```
+
+## Deploy with the DomCloud YAML config (optional)
+
+Paste this in your site's **Deploy / Config** section (replace `<your-username>` with your fork's owner):
+
+```yaml
+source: https://github.com/<your-username>/ubuntu-in-termux
+commands:
+  - chmod +x ubuntu.sh
+  - ./ubuntu.sh -y
+```
+
+## Troubleshooting
+
+| Problem | Fix |
+|---|---|
+| `FATAL: kernel too old` | Edit `~/ubuntu-domcloud/startubuntu.sh` and remove the `#` before `command+=" -k 4.14.81"` |
+| `xz` not found | Ask DomCloud support / use a plan that has `xz`, it is needed to extract the rootfs |
+| Rootfs download fails | Check that `github.com` is reachable: `curl -sI https://github.com \| head -1` |
+| proot error / ptrace blocked | DomCloud's container may block ptrace; proot cannot run there |
+| Reinstall from scratch | `rm -rf ~/ubuntu-domcloud` and run `./ubuntu.sh -y` again |
+
+## Notes
+
+- Install location: `~/ubuntu-domcloud`
+- Your home is available inside Ubuntu at `/host-home`
+- Long-running background processes may be killed by shared hosting; check DomCloud's terms of service for allowed usage.
