@@ -4,6 +4,17 @@ Install Ubuntu 22.04 (jammy) with **proot** on — no root needed.
 The rootfs is downloaded from GitHub (proot-distro releases), because  blocks the Ubuntu mirrors.
 Works on both `x86_64` and `aarch64` servers.
 
+> ## ⚠️ IMPORTANT: Root access
+>
+> Running `~/ubuntu-domcloud/startubuntu.sh` gives you a **root user inside Ubuntu** (`whoami` → `root`, `id` → `uid=0`).
+> This is **fake root** (proot), not real root on the DomCloud server.
+>
+> - ✅ No `sudo` needed inside Ubuntu: run `apt install ...` directly
+> - ✅ Full control over the Ubuntu filesystem (`/etc`, `/usr`, `/root`)
+> - ❌ No real root on the host: no systemd, Docker, firewall changes, or ports 80/443
+>
+> See the **Root access** section below for details.
+
 ## Deploy
 
 Open the DomCloud **Webshell** (or SSH into your site) and run:
@@ -39,6 +50,40 @@ startubuntu
 ```
 
 Leave Ubuntu with `exit`.
+
+## More ways to use `startubuntu.sh`
+
+Run a single command without entering the shell:
+
+```bash
+~/ubuntu-domcloud/startubuntu.sh apt update
+~/ubuntu-domcloud/startubuntu.sh "cat /etc/os-release"
+```
+
+Create a short alias so `ubuntu` opens the shell:
+
+```bash
+echo 'alias ubuntu="~/ubuntu-domcloud/startubuntu.sh"' >> ~/.bashrc
+source ~/.bashrc
+ubuntu
+```
+
+## Root access
+
+Inside Ubuntu you get **fake root**, not real root. `startubuntu.sh` uses `proot -0`, so `whoami` shows `root`, but you are still your normal DomCloud user on the host.
+
+**You can:**
+- Install packages with `apt install` (Python, Node.js, git, nano, ...)
+- Create, edit and delete files inside the Ubuntu filesystem
+- Work freely in `/root` and any folder inside Ubuntu
+
+**You cannot:**
+- Change host system files or read other users' files
+- Run real `systemd` services or change `iptables` / firewall rules
+- Load kernel modules, mount filesystems, or bind to low ports (80, 443)
+- Run Docker
+
+Real root / `sudo` on the DomCloud host is not available on shared hosting. Use a VPS if you need it.
 
 ## First-time setup inside Ubuntu
 
@@ -81,5 +126,5 @@ commands:
 ## Notes
 
 - Install location: `~/ubuntu-domcloud`
-- Your home is available inside Ubuntu at `/host-home`
+- Your DomCloud home is available inside Ubuntu at `/host-home`
 - Long-running background processes may be killed by shared hosting; check DomCloud's terms of service for allowed usage.
