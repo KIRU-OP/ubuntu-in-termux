@@ -9,13 +9,9 @@ DIRECTORY="$BASE_DIR/ubuntu-fs"
 BIN_DIR="$HOME/.local/bin"
 PROOT_VERSION="v5.3.0"
 UBUNTU_SERIES="22.04"      # jammy LTS
-# cdimage.ubuntu.com DomCloud pe blocked hai, isliye mirrors try honge
-BASE_URLS=(
-  "https://mirrors.tuna.tsinghua.edu.cn/ubuntu-cdimage/ubuntu-base/releases/${UBUNTU_SERIES}/release"
-  "https://mirrors.ustc.edu.cn/ubuntu-cdimage/ubuntu-base/releases/${UBUNTU_SERIES}/release"
-  "https://mirrors.aliyun.com/ubuntu-cdimage/ubuntu-base/releases/${UBUNTU_SERIES}/release"
-  "https://cdimage.ubuntu.com/ubuntu-base/releases/${UBUNTU_SERIES}/release"
-)
+# DomCloud pe ubuntu mirrors blocked hain, GitHub khula hai:
+# proot-distro ka Ubuntu 22.04 (jammy) rootfs GitHub releases se
+PD_VERSION="v4.11.0"
 
 log()  { printf "\x1b[38;5;214m[%s]\e[0m \x1b[38;5;83m[INFO]:\e[0m \x1b[38;5;87m %s\e[0m\n" "$(date +%r)" "$*"; }
 warn() { printf "\x1b[38;5;214m[%s]\e[0m \x1b[38;5;227m[WARNING]:\e[0m \x1b[38;5;87m %s\e[0m\n" "$(date +%r)" "$*"; }
@@ -60,20 +56,16 @@ install_ubuntu() {
   if [ -d "$DIRECTORY/bin" ] || [ -d "$DIRECTORY/usr" ]; then
     warn "Rootfs pehle se hai, download aur extraction skip."
   else
-    log "Ubuntu-base ${UBUNTU_SERIES} mirrors try ho rahe hain..."
-    rm -f ubuntu.tar.gz
-    for URL in "${BASE_URLS[@]}"; do
-      FILE="$(fetch_stdout "$URL/" 2>/dev/null | grep -oE "ubuntu-base-[0-9.]+-base-${ARCH}\.tar\.gz" | sort -uV | tail -n1)"
-      [ -n "$FILE" ] || { warn "Fail: $URL"; continue; }
-      log "Downloading $FILE from $URL ..."
-      if fetch "$URL/$FILE" ubuntu.tar.gz && tar -tzf ubuntu.tar.gz >/dev/null 2>&1; then break; fi
-      warn "Download fail: $URL"; rm -f ubuntu.tar.gz
-    done
-    [ -f ubuntu.tar.gz ] || err "Kisi mirror se rootfs nahi mila. Network check karo."
+    ROOTFS_URL="https://github.com/termux/proot-distro/releases/download/${PD_VERSION}/ubuntu-jammy-${PROOT_ARCH}-pd-${PD_VERSION}.tar.xz"
+    log "Downloading Ubuntu 22.04 rootfs (${PROOT_ARCH}) from GitHub..."
+    rm -f ubuntu.tar.xz
+    fetch "$ROOTFS_URL" ubuntu.tar.xz || err "Rootfs download fail: $ROOTFS_URL"
+    command -v xz >/dev/null 2>&1 || err "xz install nahi hai (tar -J ke liye zaruri)."
 
     mkdir -p "$DIRECTORY"
     log "Extracting rootfs..."
-    "$PROOT_BIN" --link2symlink tar -zxf ubuntu.tar.gz -C "$DIRECTORY" --exclude='dev' || :
+    "$PROOT_BIN" --link2symlink tar -xJf ubuntu.tar.xz -C "$DIRECTORY" --strip-components=1 --exclude='dev' || :
+    [ -x "$DIRECTORY/bin/bash" ] || err "Extraction fail."
     log "Rootfs extract ho gaya."
 
     log "DNS fix (resolv.conf)..."
@@ -83,7 +75,7 @@ install_ubuntu() {
     printf '#!/bin/sh\nexit\n' > "$DIRECTORY/usr/bin/groups"
     chmod +x "$DIRECTORY/usr/bin/groups"
 
-    rm -f ubuntu.tar.gz
+    rm -f ubuntu.tar.xz
   fi
 
   # ---- start script ----
