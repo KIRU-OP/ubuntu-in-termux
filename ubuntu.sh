@@ -36,6 +36,17 @@ case "$(uname -m)" in
   *) err "Unknown architecture: $(uname -m)" ;;
 esac
 
+# ---- apt keyring fix (NO_PUBKEY 871920D1991BC93C) ----
+fix_apt_keys() {
+  log "Ubuntu apt keyring check/fix ho raha hai..."
+  "$BASE_DIR/startubuntu.sh" 'apt-get update >/dev/null 2>&1 && exit 0
+apt-get -o Acquire::AllowInsecureRepositories=true -o Acquire::AllowDowngradeToInsecureRepositories=true update
+apt-get install -y --reinstall --allow-unauthenticated ubuntu-keyring gnupg
+apt-get update' \
+    && log "apt keyring theek hai." \
+    || warn "Keyring fix fail. Ubuntu ke andar manually karo (README dekho)."
+}
+
 install_ubuntu() {
   mkdir -p "$BASE_DIR" "$BIN_DIR" "$BASE_DIR/ubuntu-binds"
   cd "$BASE_DIR" || err "Directory nahi mili: $BASE_DIR"
@@ -113,6 +124,8 @@ fi
 EOM
   chmod +x "$BASE_DIR/startubuntu.sh"
   ln -sf "$BASE_DIR/startubuntu.sh" "$BIN_DIR/startubuntu"
+
+  fix_apt_keys
 
   log "Install complete! Launch: $BASE_DIR/startubuntu.sh  (ya: startubuntu)"
   log "Agar 'startubuntu' na mile to: export PATH=\"\$HOME/.local/bin:\$PATH\""
