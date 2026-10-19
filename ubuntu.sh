@@ -8,8 +8,14 @@ BASE_DIR="$HOME/ubuntu-domcloud"
 DIRECTORY="$BASE_DIR/ubuntu-fs"
 BIN_DIR="$HOME/.local/bin"
 PROOT_VERSION="v5.3.0"
-UBUNTU_SERIES="24.04"      # LTS; 24.10 EOL ho chuka hai
-BASE_URL="https://cdimage.ubuntu.com/ubuntu-base/releases/${UBUNTU_SERIES}/release"
+UBUNTU_SERIES="22.04"      # jammy LTS
+# cdimage.ubuntu.com DomCloud pe blocked hai, isliye mirrors try honge
+BASE_URLS=(
+  "https://mirrors.tuna.tsinghua.edu.cn/ubuntu-cdimage/ubuntu-base/releases/${UBUNTU_SERIES}/release"
+  "https://mirrors.ustc.edu.cn/ubuntu-cdimage/ubuntu-base/releases/${UBUNTU_SERIES}/release"
+  "https://mirrors.aliyun.com/ubuntu-cdimage/ubuntu-base/releases/${UBUNTU_SERIES}/release"
+  "https://cdimage.ubuntu.com/ubuntu-base/releases/${UBUNTU_SERIES}/release"
+)
 
 log()  { printf "\x1b[38;5;214m[%s]\e[0m \x1b[38;5;83m[INFO]:\e[0m \x1b[38;5;87m %s\e[0m\n" "$(date +%r)" "$*"; }
 warn() { printf "\x1b[38;5;214m[%s]\e[0m \x1b[38;5;227m[WARNING]:\e[0m \x1b[38;5;87m %s\e[0m\n" "$(date +%r)" "$*"; }
@@ -54,11 +60,16 @@ install_ubuntu() {
   if [ -d "$DIRECTORY/bin" ] || [ -d "$DIRECTORY/usr" ]; then
     warn "Rootfs pehle se hai, download aur extraction skip."
   else
-    log "Latest ubuntu-base ${UBUNTU_SERIES} dhoondh raha hoon..."
-    FILE="$(fetch_stdout "$BASE_URL/" | grep -oE "ubuntu-base-[0-9.]+-base-${ARCH}\.tar\.gz" | sort -uV | tail -n1)"
-    [ -n "$FILE" ] || err "Rootfs file nahi mili: $BASE_URL"
-    log "Downloading $FILE ..."
-    fetch "$BASE_URL/$FILE" ubuntu.tar.gz || err "Rootfs download fail."
+    log "Ubuntu-base ${UBUNTU_SERIES} mirrors try ho rahe hain..."
+    rm -f ubuntu.tar.gz
+    for URL in "${BASE_URLS[@]}"; do
+      FILE="$(fetch_stdout "$URL/" 2>/dev/null | grep -oE "ubuntu-base-[0-9.]+-base-${ARCH}\.tar\.gz" | sort -uV | tail -n1)"
+      [ -n "$FILE" ] || { warn "Fail: $URL"; continue; }
+      log "Downloading $FILE from $URL ..."
+      if fetch "$URL/$FILE" ubuntu.tar.gz && tar -tzf ubuntu.tar.gz >/dev/null 2>&1; then break; fi
+      warn "Download fail: $URL"; rm -f ubuntu.tar.gz
+    done
+    [ -f ubuntu.tar.gz ] || err "Kisi mirror se rootfs nahi mila. Network check karo."
 
     mkdir -p "$DIRECTORY"
     log "Extracting rootfs..."
