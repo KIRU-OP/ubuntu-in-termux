@@ -36,85 +36,40 @@ case "$(uname -m)" in
   *) err "Unknown architecture: $(uname -m)" ;;
 esac
 
-# ---- apt fix: NO_PUBKEY 871920D1991BC93C (proot) ----
+# ---- apt fix: NO_PUBKEY 871920D1991BC93C (proot 5.3.0 faccessat2 bug) ----
+# Root cause: proot 5.3.0 faccessat2 ka path translate nahi karta, isliye apt-key ka
+# `[ -r keyring ]` check HOST path pe hota hai (guest path pe nahi) -> keyring "unreadable"
+# -> /dev/null keyring -> NO_PUBKEY. Fix: keyring ko host aur guest dono me SAME path pe rakho.
 fix_apt_keys() {
   log "Ubuntu apt keyring fix ho raha hai..."
   local APT_DIR="$DIRECTORY/etc/apt"
-  local KEYFILE="$DIRECTORY/usr/share/keyrings/ubuntu-archive-keyring.gpg"
+  local SRC_KEY="$DIRECTORY/usr/share/keyrings/ubuntu-archive-keyring.gpg"
+  local KEYDIR="$BASE_DIR/apt-keys"
+  local KEYPATH="$KEYDIR/ubuntu-archive-keyring.gpg"
 
-  # 1. proot me apt ka _apt sandbox user key nahi padh pata
-  mkdir -p "$APT_DIR/apt.conf.d"
+  mkdir -p "$KEYDIR" "$APT_DIR/apt.conf.d"
+  [ -s "$SRC_KEY" ] || { warn "Rootfs me keyring file nahi mili: $SRC_KEY"; return 1; }
+  cp -f "$SRC_KEY" "$KEYPATH" && chmod 644 "$KEYPATH"
+
   echo 'APT::Sandbox::User "root";' > "$APT_DIR/apt.conf.d/99proot"
 
-  # 2. keyring file adhuri/missing ho to package host se laao aur rootfs me extract karo
-  if [ ! -s "$KEYFILE" ]; then
-    warn "Keyring file missing, ubuntu-keyring package laa raha hoon..."
-    local B="http://ports.ubuntu.com/ubuntu-ports/pool/main/u/ubuntu-keyring/"
-    local F
-    F="$(fetch_stdout "$B" | grep -oE 'ubuntu-keyring_[0-9.]+_all\.deb' | sort -uV | tail -n1)"
-    if [ -n "$F" ] && fetch "$B$F" "$BASE_DIR/$F"; then
-      mkdir -p "$BASE_DIR/kr-tmp" && ( cd "$BASE_DIR/kr-tmp" && ar x "../$F" 2>/dev/null )
-      if ls "$BASE_DIR"/kr-tmp/data.tar.* >/dev/null 2>&1; then
-        tar -xf "$BASE_DIR"/kr-tmp/data.tar.* -C "$DIRECTORY" 2>/dev/null
-      elif command -v dpkg-deb >/dev/null 2>&1; then
-        dpkg-deb -x "$BASE_DIR/$F" "$DIRECTORY"
-      fi
-      rm -rf "$BASE_DIR/kr-tmp" "$BASE_DIR/$F"
-    fi
-  fi
-  [ -s "$KEYFILE" ] || { warn "Keyring file ab bhi nahi mili."; return 1; }
+  [ -f "$APT_DIR/sources.list.orig" ] || cp "$APT_DIR/sources.list" "$APT_DIR/sources.list.orig"
+  sed -i -E "s#^deb (\[[^]]*\] )?#deb [signed-by=$KEYPATH] #" "$APT_DIR/sources.list"
 
-  # 3. sources.list ko keyring file se bind karo (idempotent)
-  if [ -f "$APT_DIR/sources.list" ] && ! grep -q 'signed-by=' "$APT_DIR/sources.list"; then
-    cp "$APT_DIR/sources.list" "$APT_DIR/sources.list.bak"
-    sed -i -E 's#^deb (\[[^]]*\] )?#deb [signed-by=/usr/share/keyrings/ubuntu-archive-keyring.gpg] #' "$APT_DIR/sources.list"
-  fi
-
-  # 4. verify (verified mode)
-  if "$BASE_DIR/startubuntu.sh" 'apt-get update -o Debug::Acquire::gpgv=true' > "$BASE_DIR/apt-debug.log" 2>&1; then
+  if "$BASE_DIR/startubuntu.sh" 'apt-get update' > "$BASE_DIR/apt-debug.log" 2>&1; then
     log "apt update sahi chal raha hai (signature verified)."
     return 0
   fi
 
-  apt_diag
-
-  # 5. fallback: proot me gpgv key nahi padh paa raha -> trusted=yes (UNVERIFIED)
-  warn "apt signature verify fail (debug log: $BASE_DIR/apt-debug.log)."
-  warn "Fallback: trusted=yes laga raha hoon. Packages UNVERIFIED honge (http source)."
-  [ -f "$APT_DIR/sources.list.orig" ] || cp "$APT_DIR/sources.list" "$APT_DIR/sources.list.orig"
-  sed -i -E 's#signed-by="?[^] "]*"?#trusted=yes#' "$APT_DIR/sources.list"
+  warn "apt update abhi bhi fail (log: $BASE_DIR/apt-debug.log)."
+  warn "Fallback: trusted=yes (packages UNVERIFIED, source http)."
+  sed -i -E 's#signed-by=[^] ]*#trusted=yes#' "$APT_DIR/sources.list"
   if "$BASE_DIR/startubuntu.sh" 'apt-get update' >> "$BASE_DIR/apt-debug.log" 2>&1; then
     log "apt update chal gaya (trusted=yes mode)."
-    log "Wapas verified mode: cp $APT_DIR/sources.list.orig $APT_DIR/sources.list"
   else
     warn "apt update ab bhi fail. $BASE_DIR/apt-debug.log bhejo."
     return 1
   fi
-}
-
-# ---- diagnose: key file sahi hai? gpgv host pe / proot me chalta hai? ----
-apt_diag() {
-  local T="$BASE_DIR/gpg-test"
-  local KF="$DIRECTORY/usr/share/keyrings/ubuntu-archive-keyring.gpg"
-  mkdir -p "$T"
-  warn "---- DIAGNOSIS (ye output bhejo) ----"
-  warn "arch: $(uname -m) | date: $(date -u +%FT%TZ)"
-  warn "keyring file: $(ls -l "$KF" 2>&1)"
-  warn "keyring sha256: $(sha256sum "$KF" 2>&1 | cut -c1-64)"
-  if fetch "http://ports.ubuntu.com/ubuntu-ports/dists/jammy/InRelease" "$T/InRelease"; then
-    warn "InRelease size: $(wc -c < "$T/InRelease") bytes"
-    if command -v gpgv >/dev/null 2>&1; then
-      warn "HOST gpgv: $(gpgv --keyring "$KF" "$T/InRelease" 2>&1 | head -3 | tr '\n' ' ')"
-    else
-      warn "HOST gpgv: not installed"
-    fi
-    warn "PROOT gpgv: $("$BASE_DIR/startubuntu.sh" "gpgv --keyring /usr/share/keyrings/ubuntu-archive-keyring.gpg /host-home/ubuntu-domcloud/gpg-test/InRelease" 2>&1 | head -4 | tr '\n' ' ')"
-  else
-    warn "InRelease download fail"
-  fi
-  warn "apt-debug: $(grep -iE 'gpgv|keyring|NO_PUBKEY|denied|permission' "$BASE_DIR/apt-debug.log" 2>/dev/null | head -6 | tr '\n' ' ')"
-  warn "---- END DIAGNOSIS ----"
-  rm -rf "$T"
 }
 
 install_ubuntu() {
@@ -189,6 +144,7 @@ command+=" -b /dev"
 command+=" -b /proc"
 command+=" -b /sys"
 command+=" -b ubuntu-fs/tmp:/dev/shm"
+command+=" -b $BASE_DIR/apt-keys:$BASE_DIR/apt-keys"
 command+=" -b $HOME:/host-home"
 command+=" -w /root"
 command+=" /usr/bin/env -i"
