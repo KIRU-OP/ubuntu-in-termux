@@ -36,6 +36,42 @@ case "$(uname -m)" in
   *) err "Unknown architecture: $(uname -m)" ;;
 esac
 
+# ---- apt fix: NO_PUBKEY 871920D1991BC93C (proot 5.3.0 faccessat2 bug) ----
+# Root cause: proot 5.3.0 faccessat2 ka path translate nahi karta, isliye apt-key ka
+# `[ -r keyring ]` check HOST path pe hota hai (guest path pe nahi) -> keyring "unreadable"
+# -> /dev/null keyring -> NO_PUBKEY. Fix: keyring ko host aur guest dono me SAME path pe rakho.
+fix_apt_keys() {
+  log "Ubuntu apt keyring fix ho raha hai..."
+  local APT_DIR="$DIRECTORY/etc/apt"
+  local SRC_KEY="$DIRECTORY/usr/share/keyrings/ubuntu-archive-keyring.gpg"
+  local KEYDIR="$BASE_DIR/apt-keys"
+  local KEYPATH="$KEYDIR/ubuntu-archive-keyring.gpg"
+
+  mkdir -p "$KEYDIR" "$APT_DIR/apt.conf.d"
+  [ -s "$SRC_KEY" ] || { warn "Rootfs me keyring file nahi mili: $SRC_KEY"; return 1; }
+  cp -f "$SRC_KEY" "$KEYPATH" && chmod 644 "$KEYPATH"
+
+  echo 'APT::Sandbox::User "root";' > "$APT_DIR/apt.conf.d/99proot"
+
+  [ -f "$APT_DIR/sources.list.orig" ] || cp "$APT_DIR/sources.list" "$APT_DIR/sources.list.orig"
+  sed -i -E "s#^deb (\[[^]]*\] )?#deb [signed-by=$KEYPATH] #" "$APT_DIR/sources.list"
+
+  if "$BASE_DIR/startubuntu.sh" 'apt-get update' > "$BASE_DIR/apt-debug.log" 2>&1; then
+    log "apt update sahi chal raha hai (signature verified)."
+    return 0
+  fi
+
+  warn "apt update abhi bhi fail (log: $BASE_DIR/apt-debug.log)."
+  warn "Fallback: trusted=yes (packages UNVERIFIED, source http)."
+  sed -i -E 's#signed-by=[^] ]*#trusted=yes#' "$APT_DIR/sources.list"
+  if "$BASE_DIR/startubuntu.sh" 'apt-get update' >> "$BASE_DIR/apt-debug.log" 2>&1; then
+    log "apt update chal gaya (trusted=yes mode)."
+  else
+    warn "apt update ab bhi fail. $BASE_DIR/apt-debug.log bhejo."
+    return 1
+  fi
+}
+
 install_ubuntu() {
   mkdir -p "$BASE_DIR" "$BIN_DIR" "$BASE_DIR/ubuntu-binds"
   cd "$BASE_DIR" || err "Directory nahi mili: $BASE_DIR"
@@ -62,10 +98,21 @@ install_ubuntu() {
     fetch "$ROOTFS_URL" ubuntu.tar.xz || err "Rootfs download fail: $ROOTFS_URL"
     command -v xz >/dev/null 2>&1 || err "xz install nahi hai (tar -J ke liye zaruri)."
 
+    # adhuri/purani rootfs hatao (proot ki read-only dirs ke liye pehle chmod)
+    if [ -e "$DIRECTORY" ]; then
+      chmod -R u+rwx "$DIRECTORY" 2>/dev/null
+      rm -rf "$DIRECTORY"
+    fi
+    [ -s ubuntu.tar.xz ] && xz -t ubuntu.tar.xz 2>/dev/null || err "Download kharab hai (ubuntu.tar.xz). Dobara chalao."
     mkdir -p "$DIRECTORY"
     log "Extracting rootfs..."
-    "$PROOT_BIN" --link2symlink tar -xJf ubuntu.tar.xz -C "$DIRECTORY" --strip-components=1 --exclude='dev' || :
-    [ -x "$DIRECTORY/bin/bash" ] || err "Extraction fail."
+    # pehle plain tar (proot ke bina), fail ho to proot tar
+    tar -xJf ubuntu.tar.xz -C "$DIRECTORY" --strip-components=1 --no-same-owner --exclude='dev' 2>"$BASE_DIR/extract.log" || :
+    if [ ! -x "$DIRECTORY/bin/bash" ]; then
+      warn "Plain tar se extract adhura, proot tar try ho raha hai (log: $BASE_DIR/extract.log)"
+      "$PROOT_BIN" --link2symlink tar -xJf ubuntu.tar.xz -C "$DIRECTORY" --strip-components=1 --exclude='dev' 2>>"$BASE_DIR/extract.log" || :
+    fi
+    [ -x "$DIRECTORY/bin/bash" ] || err "Extraction fail. Log: $BASE_DIR/extract.log"
     log "Rootfs extract ho gaya."
 
     log "DNS fix (resolv.conf)..."
@@ -97,6 +144,7 @@ command+=" -b /dev"
 command+=" -b /proc"
 command+=" -b /sys"
 command+=" -b ubuntu-fs/tmp:/dev/shm"
+command+=" -b $BASE_DIR/apt-keys:$BASE_DIR/apt-keys"
 command+=" -b $HOME:/host-home"
 command+=" -w /root"
 command+=" /usr/bin/env -i"
@@ -113,6 +161,8 @@ fi
 EOM
   chmod +x "$BASE_DIR/startubuntu.sh"
   ln -sf "$BASE_DIR/startubuntu.sh" "$BIN_DIR/startubuntu"
+
+  fix_apt_keys
 
   log "Install complete! Launch: $BASE_DIR/startubuntu.sh  (ya: startubuntu)"
   log "Agar 'startubuntu' na mile to: export PATH=\"\$HOME/.local/bin:\$PATH\""
