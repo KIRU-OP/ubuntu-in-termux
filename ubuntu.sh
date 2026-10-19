@@ -70,10 +70,24 @@ fix_apt_keys() {
     sed -i -E 's#^deb (\[[^]]*\] )?#deb [signed-by=/usr/share/keyrings/ubuntu-archive-keyring.gpg] #' "$APT_DIR/sources.list"
   fi
 
-  # 4. verify
-  "$BASE_DIR/startubuntu.sh" 'apt-get update' \
-    && log "apt update sahi chal raha hai." \
-    || warn "apt update abhi bhi fail. Output README ke Troubleshooting me bhejo."
+  # 4. verify (verified mode)
+  if "$BASE_DIR/startubuntu.sh" 'apt-get update -o Debug::Acquire::gpgv=true' > "$BASE_DIR/apt-debug.log" 2>&1; then
+    log "apt update sahi chal raha hai (signature verified)."
+    return 0
+  fi
+
+  # 5. fallback: proot me gpgv key nahi padh paa raha -> trusted=yes (UNVERIFIED)
+  warn "apt signature verify fail (debug log: $BASE_DIR/apt-debug.log)."
+  warn "Fallback: trusted=yes laga raha hoon. Packages UNVERIFIED honge (http source)."
+  [ -f "$APT_DIR/sources.list.orig" ] || cp "$APT_DIR/sources.list" "$APT_DIR/sources.list.orig"
+  sed -i -E 's#signed-by="?[^] "]*"?#trusted=yes#' "$APT_DIR/sources.list"
+  if "$BASE_DIR/startubuntu.sh" 'apt-get update' >> "$BASE_DIR/apt-debug.log" 2>&1; then
+    log "apt update chal gaya (trusted=yes mode)."
+    log "Wapas verified mode: cp $APT_DIR/sources.list.orig $APT_DIR/sources.list"
+  else
+    warn "apt update ab bhi fail. $BASE_DIR/apt-debug.log bhejo."
+    return 1
+  fi
 }
 
 install_ubuntu() {
