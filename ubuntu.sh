@@ -72,6 +72,25 @@ fix_apt_keys() {
   fi
 }
 
+# ---- proot --link2symlink ke bache hue .l2s.* symlink chains saaf karo ----
+# (inki wajah se dpkg me "Illegal seek" / "unable to securely remove" error aate hain)
+cleanup_l2s() {
+  local ROOT="$1" l tgt real d
+  [ -d "$ROOT" ] || return 0
+  find "$ROOT" -xdev -type l -print0 2>/dev/null | while IFS= read -r -d '' l; do
+    tgt="$(readlink "$l")"
+    case "$tgt" in *.l2s.*) ;; *) continue ;; esac
+    real="$(readlink -f "$l" 2>/dev/null)"
+    if [ ! -f "$real" ]; then
+      d="$(dirname "$l")"; real="$d/$(basename "$tgt")"
+      while [ -L "$real" ]; do real="$d/$(basename "$(readlink "$real")")"; done
+    fi
+    [ -f "$real" ] && cp --remove-destination -p "$real" "$l"
+  done
+  find "$ROOT" -xdev -name '.l2s.*' -exec rm -f {} + 2>/dev/null
+  return 0
+}
+
 install_ubuntu() {
   mkdir -p "$BASE_DIR" "$BIN_DIR" "$BASE_DIR/ubuntu-binds"
   cd "$BASE_DIR" || err "Directory nahi mili: $BASE_DIR"
@@ -134,7 +153,8 @@ unset LD_PRELOAD
 command="$PROOT_BIN"
 # 'FATAL: kernel too old' aaye to neeche wali line uncomment karo
 #command+=" -k 4.14.81"
-command+=" --link2symlink"
+# --link2symlink band hai: DomCloud normal Linux fs hai, hard links chalte hain
+# (flag se dpkg me "Illegal seek" aata tha)
 command+=" -0"
 command+=" -r ubuntu-fs"
 if [ -n "\$(ls -A ubuntu-binds 2>/dev/null)" ]; then
@@ -161,6 +181,9 @@ fi
 EOM
   chmod +x "$BASE_DIR/startubuntu.sh"
   ln -sf "$BASE_DIR/startubuntu.sh" "$BIN_DIR/startubuntu"
+
+  log ".l2s leftovers saaf ho rahe hain..."
+  cleanup_l2s "$DIRECTORY"
 
   fix_apt_keys
 
